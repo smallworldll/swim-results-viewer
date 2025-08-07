@@ -1,63 +1,79 @@
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import matplotlib.pyplot as plt
+
+st.set_page_config(page_title="游泳成绩查询系统", layout="wide")
 
 # 加载数据
 swim_data = pd.read_csv("swim-data.csv")
-pool_data = pd.read_csv("Pools-data.csv")
+pools_data = pd.read_csv("Pools-data.csv")
 
 # 合并数据
-data = pd.merge(swim_data, pool_data, on="PoolID", how="left")
+data = pd.merge(swim_data, pools_data, on="PoolID", how="left")
 
-# 设置页面标题
+# 筛选选项顺序：Name -> Event -> Length -> Pool Name -> City -> Date
 st.title("🏊‍♀️ 游泳成绩查询系统")
-st.markdown("## 🔍 请选择筛选条件")
+st.header("🔍 请选择筛选条件")
 
-# 下拉筛选框顺序：name，event，泳池长度，泳池名称，城市，日期
+# 名字筛选，默认 Anna
 name_options = ["All"] + sorted(data["Name"].dropna().unique().tolist())
-name_filter = st.selectbox("Name", name_options, index=name_options.index("Anna") if "Anna" in name_options else 0)
+selected_name = st.selectbox("Name", name_options, index=name_options.index("Anna") if "Anna" in name_options else 0)
 
+# 项目筛选
 event_options = ["All"] + sorted(data["Event"].dropna().unique().tolist())
-event_filter = st.selectbox("Event", event_options)
+selected_event = st.selectbox("Event", event_options)
 
-length_options = ["All"] + sorted(data["LengthMeters"].dropna().astype(int).astype(str).unique().tolist())
-length_filter = st.selectbox("Length (Meters)", length_options)
+# 泳池长度筛选（整数格式）
+length_options = ["All"] + sorted(data["LengthMeters"].dropna().astype(int).unique().tolist())
+selected_length = st.selectbox("Length (Meters)", length_options)
 
-pool_options = ["All"] + sorted(data["PoolName"].dropna().unique().tolist())
-pool_filter = st.selectbox("Pool Name", pool_options)
+# 泳池名称筛选
+poolname_options = ["All"] + sorted(data["PoolName"].dropna().unique().tolist())
+selected_poolname = st.selectbox("Pool Name", poolname_options)
 
+# 城市筛选
 city_options = ["All"] + sorted(data["City"].dropna().unique().tolist())
-city_filter = st.selectbox("City", city_options)
+selected_city = st.selectbox("City", city_options)
 
+# 日期筛选
 date_options = ["All"] + sorted(data["Date"].dropna().unique().tolist())
-date_filter = st.selectbox("Date", date_options)
+selected_date = st.selectbox("Date", date_options)
 
-# 多条件筛选
+# 多条件过滤
 filtered_data = data.copy()
-if name_filter != "All":
-    filtered_data = filtered_data[filtered_data["Name"] == name_filter]
-if event_filter != "All":
-    filtered_data = filtered_data[filtered_data["Event"] == event_filter]
-if length_filter != "All":
-    filtered_data = filtered_data[filtered_data["LengthMeters"].astype(int).astype(str) == length_filter]
-if pool_filter != "All":
-    filtered_data = filtered_data[filtered_data["PoolName"] == pool_filter]
-if city_filter != "All":
-    filtered_data = filtered_data[filtered_data["City"] == city_filter]
-if date_filter != "All":
-    filtered_data = filtered_data[filtered_data["Date"] == date_filter]
+if selected_name != "All":
+    filtered_data = filtered_data[filtered_data["Name"] == selected_name]
+if selected_event != "All":
+    filtered_data = filtered_data[filtered_data["Event"] == selected_event]
+if selected_length != "All":
+    filtered_data = filtered_data[filtered_data["LengthMeters"].astype(int) == selected_length]
+if selected_poolname != "All":
+    filtered_data = filtered_data[filtered_data["PoolName"] == selected_poolname]
+if selected_city != "All":
+    filtered_data = filtered_data[filtered_data["City"] == selected_city]
+if selected_date != "All":
+    filtered_data = filtered_data[filtered_data["Date"] == selected_date]
 
-# 显示表格
-st.markdown("## 比赛记录")
+st.subheader("🏅 比赛记录")
 st.dataframe(filtered_data)
 
-# 绘制图表
+# 画图（如果数据格式允许）
 try:
-    filtered_data["Seconds"] = filtered_data["Result"].apply(
-        lambda x: int(x.split(":")[0]) * 60 + float(x.split(":")[1])
-    )
-    fig = px.bar(filtered_data, x="Date", y="Seconds", color="Event", title="比赛成绩图表")
-    st.plotly_chart(fig)
+    def parse_time(t):
+        parts = t.strip().split(":")
+        if len(parts) == 3:
+            return int(parts[0])*60 + int(parts[1]) + int(parts[2])/100
+        elif len(parts) == 2:
+            return int(parts[0])*60 + float(parts[1])
+        else:
+            return float(t)
+    filtered_data["Seconds"] = filtered_data["Result"].apply(parse_time)
+    fig, ax = plt.subplots()
+    ax.plot(filtered_data["Date"], filtered_data["Seconds"], marker='o')
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Time (Seconds)")
+    ax.set_title("Performance Over Time")
+    st.pyplot(fig)
 except Exception as e:
-    st.warning("图表生成失败：请确保成绩格式为 mm:ss 或 m:ss.fff")
+    st.warning(f"图表生成失败：{e}")
