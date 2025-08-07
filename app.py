@@ -2,47 +2,57 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 加载数据
+# 读取数据
 swim_data = pd.read_csv("swim-data.csv")
 pool_data = pd.read_csv("Pools-data.csv")
 
 # 合并数据
 data = pd.merge(swim_data, pool_data, on="PoolID", how="left")
 
+# 页面标题
 st.title("🏊‍♀️ 游泳成绩查询系统")
-st.markdown("### 🔍 请选择筛选条件")
+st.markdown("## 🔍 请选择筛选条件")
 
-# 筛选控件
-name_filter = st.selectbox("Name", ["All"] + sorted(data["Name"].dropna().unique().tolist()))
-pool_filter = st.selectbox("Pool Name", ["All"] + sorted(data["PoolName"].dropna().unique().tolist()))
-event_filter = st.selectbox("Event", ["All"] + sorted(data["Event"].dropna().unique().tolist()))
-city_filter = st.selectbox("City", ["All"] + sorted(data["City"].dropna().unique().tolist()))
-date_filter = st.selectbox("Date", ["All"] + sorted(data["Date"].dropna().unique().tolist()))
+# 筛选器
+name_options = ["All"] + sorted(data["Name"].dropna().unique().tolist())
+pool_options = ["All"] + sorted(data["PoolName"].dropna().unique().tolist())
+event_options = ["All"] + sorted(data["Event"].dropna().unique().tolist())
+city_options = ["All"] + sorted(data["City"].dropna().unique().tolist())
+date_options = ["All"] + sorted(data["Date"].dropna().unique().tolist())
+length_options = ["All"] + sorted(data["Length"].dropna().unique().tolist())
 
-# 应用筛选
-filtered_data = data.copy()
+name_filter = st.selectbox("Name", name_options)
+pool_filter = st.selectbox("Pool Name", pool_options)
+event_filter = st.selectbox("Event", event_options)
+city_filter = st.selectbox("City", city_options)
+date_filter = st.selectbox("Date", date_options)
+length_filter = st.selectbox("Pool Length", length_options)
+
+# 应用筛选条件
 if name_filter != "All":
-    filtered_data = filtered_data[filtered_data["Name"] == name_filter]
+    data = data[data["Name"] == name_filter]
 if pool_filter != "All":
-    filtered_data = filtered_data[filtered_data["PoolName"] == pool_filter]
+    data = data[data["PoolName"] == pool_filter]
 if event_filter != "All":
-    filtered_data = filtered_data[filtered_data["Event"] == event_filter]
+    data = data[data["Event"] == event_filter]
 if city_filter != "All":
-    filtered_data = filtered_data[filtered_data["City"] == city_filter]
+    data = data[data["City"] == city_filter]
 if date_filter != "All":
-    filtered_data = filtered_data[filtered_data["Date"] == date_filter]
+    data = data[data["Date"] == date_filter]
+if length_filter != "All":
+    data = data[data["Length"] == length_filter]
 
-# 显示数据表
-st.subheader("比赛记录")
-st.dataframe(filtered_data)
+# 显示结果表格
+st.markdown("### 比赛记录")
+st.dataframe(data)
 
-# 绘制图表（如果成绩列存在）
-if "Result" in filtered_data.columns and not filtered_data["Result"].isnull().all():
-    try:
-        filtered_data["Result_seconds"] = pd.to_timedelta("00:" + filtered_data["Result"]).dt.total_seconds()
-        fig = px.bar(filtered_data, x="Date", y="Result_seconds", color="Event", barmode="group",
-                     labels={"Result_seconds": "成绩（秒）"})
-        st.subheader("比赛成绩图表（秒）")
-        st.plotly_chart(fig)
-    except Exception as e:
-        st.warning(f"图表生成失败：{e}")
+# 绘图：比赛成绩折线图（如果格式正确）
+try:
+    time_data = data.copy()
+    time_data["Seconds"] = time_data["Result"].str.extract(r"(\d+):(\d+)\.?(\d*)")
+    time_data[["Min", "Sec", "Ms"]] = data["Result"].str.extract(r"(\d+):(\d+):?(\d*)").fillna(0).astype(int)
+    time_data["TotalSeconds"] = time_data["Min"] * 60 + time_data["Sec"] + time_data["Ms"] / 100
+    fig = px.bar(time_data, x="Date", y="TotalSeconds", color="Event", barmode="group", title="比赛成绩（按时间）")
+    st.plotly_chart(fig)
+except Exception as e:
+    st.warning(f"图表生成失败：{e}")
