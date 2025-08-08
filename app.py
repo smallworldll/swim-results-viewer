@@ -74,43 +74,56 @@ def load_all_results() -> Tuple[pd.DataFrame, pd.DataFrame]:
                 path = os.path.join(root, "results.csv")
                 df = read_csv_safe(path)
                 if not df.empty:
+                    df.columns = [c.strip() for c in df.columns]
+                    # --- normalize results to EventName ---
+                    res_ren = {c: c for c in df.columns}
+                    for c in df.columns:
+                        lc = c.lower()
+                        if lc == "event":
+                            res_ren[c] = "EventName"
+                        elif lc == "eventname":
+                            res_ren[c] = "EventName"
+                        elif lc == "name":
+                            res_ren[c] = "Name"
+                        elif lc == "result":
+                            res_ren[c] = "Result"
+                        elif lc == "rank":
+                            res_ren[c] = "Rank"
+                        elif lc == "note":
+                            res_ren[c] = "Note"
+                    df = df.rename(columns=res_ren)
+                    for need in ["Name","EventName","Result","Rank","Note"]:
+                        if need not in df.columns:
+                            df[need] = np.nan
                     df["__meet_root__"] = root
                     rows.append(df)
             if "meta.csv" in files:
                 mpath = os.path.join(root, "meta.csv")
                 md = read_csv_safe(mpath)
                 if not md.empty:
+                    md.columns = [c.strip() for c in md.columns]
+                    meta_ren = {}
+                    for c in md.columns:
+                        lc = c.lower()
+                        if lc == "date":
+                            meta_ren[c] = "Date"
+                        elif lc == "city":
+                            meta_ren[c] = "City"
+                        elif lc == "meetname":
+                            meta_ren[c] = "MeetName"
+                        elif lc == "poolname":
+                            meta_ren[c] = "PoolName"
+                        elif lc == "lengthmeters":
+                            meta_ren[c] = "LengthMeters"
+                    md = md.rename(columns=meta_ren)
+                    for need in ["Date","City","MeetName","PoolName","LengthMeters"]:
+                        if need not in md.columns:
+                            md[need] = np.nan
                     md["__meet_root__"] = root
                     metas.append(md)
 
     results = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     meta = pd.concat(metas, ignore_index=True) if metas else pd.DataFrame()
-
-    # normalize meta columns
-    if not meta.empty:
-        # Expected columns (any order): Date, City, MeetName, PoolName, LengthMeters
-        rename_map = {
-            "date": "Date",
-            "city": "City",
-            "meetname": "MeetName",
-            "poolname": "PoolName",
-            "lengthmeters": "LengthMeters",
-        }
-        meta.rename(columns={k: v for k, v in rename_map.items() if k in meta.columns}, inplace=True)
-        for c in ["Date", "City", "MeetName", "PoolName", "LengthMeters"]:
-            if c not in meta.columns:
-                meta[c] = np.nan
-
-    # normalize results
-    if not results.empty:
-        rename_map = {
-            "name": "Name",
-            "event": "Event",
-            "result": "Result",
-            "rank": "Rank",
-            "note": "Note",
-        }
-        results.rename(columns={k: v for k, v in rename_map.items() if k in results.columns}, inplace=True)
 
     # merge by folder
     if not results.empty and not meta.empty:
@@ -205,7 +218,7 @@ def page_browse():
 
     # Filters
     names = sorted([x for x in data["Name"].dropna().unique().tolist()])
-    events = sorted([x for x in data["Event"].dropna().unique().tolist()])
+    events = sorted([x for x in data["EventName"].dropna().unique().tolist()]) if "EventName" in data.columns else []
     lengths = ["All"] + sorted([int(x) for x in pd.to_numeric(data["LengthMeters"], errors="coerce").dropna().unique().tolist()])
     pools = ["All"] + sorted([x for x in data["PoolName"].dropna().unique().tolist()])
     cities = ["All"] + sorted([x for x in data["City"].dropna().unique().tolist()])
@@ -214,7 +227,7 @@ def page_browse():
     # selection widgets
     default_names = [n for n in names if isinstance(n, str) and n.lower() == "anna"] or (names[:1] if names else [])
     sel_names = st.multiselect("Name（可多选）", options=names, default=default_names, placeholder="选择选手")
-    sel_event = st.selectbox("Event", options=["All"] + events, index=0)
+    sel_event = st.selectbox("EventName", options=["All"] + events, index=0)
     sel_length = st.selectbox("Length (Meters)", options=lengths, index=0)
     sel_pool = st.selectbox("Pool Name", options=pools, index=0)
     sel_city = st.selectbox("City", options=cities, index=0)
@@ -224,8 +237,8 @@ def page_browse():
     disp = data.copy()
     if sel_names:
         disp = disp[disp["Name"].isin(sel_names)]
-    if sel_event != "All":
-        disp = disp[disp["Event"] == sel_event]
+    if sel_event != "All" and "EventName" in disp.columns:
+        disp = disp[disp["EventName"] == sel_event]
     if sel_length != "All":
         disp = disp[pd.to_numeric(disp["LengthMeters"], errors="coerce") == int(sel_length)]
     if sel_pool != "All":
@@ -243,16 +256,21 @@ def page_browse():
         st.warning("没有匹配的记录。换个筛选条件试试～")
         return
 
-    disp = disp.sort_values(["Name", "Event", "Date"]).reset_index(drop=True)
+    disp = disp.sort_values(["Name", "EventName", "Date"] if "EventName" in disp.columns else ["Name", "Date"]).reset_index(drop=True)
 
     # Determine seed/best rows
-    group_cols = ["Name", "Event"]
+    group_cols = ["Name"]
+    if "EventName" in disp.columns:
+        group_cols.append("EventName")
     if sel_length == "All":
         group_cols.append("LengthMeters")
-    best_mask = disp.groupby(group_cols)["Seconds"].transform(lambda s: s == s.min())
+    best_mask = disp.groupby(group_cols)["Seconds"].transform(lambda s: s == s.min()) if "Seconds" in disp.columns else pd.Series(False, index=disp.index)
 
     # Display table with style
-    show_cols = ["Name", "Date", "Event", "Result", "Rank", "Note", "PoolName", "City", "LengthMeters"]
+    base_cols = ["Name", "Date", "Result", "Rank", "Note", "PoolName", "City", "LengthMeters"]
+    show_cols = base_cols.copy()
+    if "EventName" in disp.columns:
+        show_cols.insert(2, "EventName")
     for col in show_cols:
         if col not in disp.columns:
             disp[col] = np.nan
@@ -266,13 +284,44 @@ def page_browse():
 
     # Line chart of trends (seconds; lower is better)
     st.subheader("📈 成绩趋势（单位：秒，越低越好）")
-    chart_df = disp.dropna(subset=["Date", "Seconds"]).copy()
+    chart_df = disp.dropna(subset=["Date", "Seconds"]).copy() if "Seconds" in disp.columns else pd.DataFrame()
     if not chart_df.empty:
         chart_df = chart_df.sort_values("Date")
         pivot = chart_df.pivot_table(index="Date", columns="Name", values="Seconds", aggfunc="min")
         st.line_chart(pivot, height=320, use_container_width=True)
     else:
         st.info("当前筛选下没有可绘制的时间序列数据。")
+
+
+def push_to_github(token: str, repo: str, branch: str, path: str, content_bytes: bytes, commit_msg: str):
+    """Create or update a file via GitHub API. Return (ok, message/url)."""
+    api_base = "https://api.github.com"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+    # get existing sha (if exists)
+    get_url = f"{api_base}/repos/{repo}/contents/{path}?ref={branch}"
+    sha = None
+    r = requests.get(get_url, headers=headers)
+    if r.status_code == 200:
+        try:
+            sha = r.json().get("sha")
+        except Exception:
+            sha = None
+
+    b64 = base64.b64encode(content_bytes).decode("utf-8")
+    put_url = f"{api_base}/repos/{repo}/contents/{path}"
+    payload = {"message": commit_msg, "content": b64, "branch": branch}
+    if sha:
+        payload["sha"] = sha
+    resp = requests.put(put_url, headers=headers, data=json.dumps(payload))
+    if resp.status_code in (200, 201):
+        try:
+            data = resp.json()
+            html_url = data.get("content", {}).get("html_url", "")
+        except Exception:
+            html_url = ""
+        return True, html_url or f"https://github.com/{repo}/blob/{branch}/{path}"
+    return False, f"{resp.status_code}: {resp.text}"
 
 
 def page_form():
@@ -300,14 +349,14 @@ def page_form():
             with c1:
                 name = st.text_input(f"Name_{i+1}", value="Anna", key=f"name_{i}")
             with c2:
-                event = st.selectbox(f"Event_{i+1}", options=events_default, index=min(i, len(events_default)-1), key=f"event_{i}")
+                eventname = st.selectbox(f"EventName_{i+1}", options=events_default, index=min(i, len(events_default)-1), key=f"event_{i}")
             with c3:
                 result = st.text_input(f"Result_{i+1}", value="0:20.42", key=f"result_{i}", help="格式示例：0:20.42 或 1:02.45")
             with c4:
                 rank = st.number_input(f"Rank_{i+1}", min_value=0, max_value=999, value=0, step=1, key=f"rank_{i}")
             with c5:
                 note = st.text_input(f"Note_{i+1}", value="", key=f"note_{i}")
-            recs.append({"Name": name, "Event": event, "Result": result, "Rank": rank, "Note": note})
+            recs.append({"Name": name, "EventName": eventname, "Result": result, "Rank": rank, "Note": note})
 
         push_github = st.checkbox("提交到 GitHub（免下载上传）", value=True, help="需要在 Settings → Secrets 配置 GITHUB_TOKEN 与 REPO。")
         save_local = st.checkbox("同时保存到本地 meets/ 目录（调试用）", value=False)
@@ -322,7 +371,7 @@ def page_form():
                 "PoolName": m_pool,
                 "LengthMeters": int(m_length),
             }])
-            results_df = pd.DataFrame(recs)
+            results_df = pd.DataFrame(recs, columns=["Name","EventName","Result","Rank","Note"])
             # Attach folder root
             folder = f"meets/{m_date.strftime('%Y-%m-%d')}_{m_city}"
             os.makedirs(folder, exist_ok=True)
