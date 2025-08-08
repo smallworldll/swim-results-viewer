@@ -4,7 +4,7 @@ import io
 import base64
 import json
 from datetime import date
-from typing import Tuple
+from typing import Tuple, List
 
 import pandas as pd
 import numpy as np
@@ -293,41 +293,22 @@ def page_browse():
         st.info("当前筛选下没有可绘制的时间序列数据。")
 
 
-def push_to_github(token: str, repo: str, branch: str, path: str, content_bytes: bytes, commit_msg: str):
-    """Create or update a file via GitHub API. Return (ok, message/url)."""
-    api_base = "https://api.github.com"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-
-    # get existing sha (if exists)
-    get_url = f"{api_base}/repos/{repo}/contents/{path}?ref={branch}"
-    sha = None
-    r = requests.get(get_url, headers=headers)
-    if r.status_code == 200:
-        try:
-            sha = r.json().get("sha")
-        except Exception:
-            sha = None
-
-    b64 = base64.b64encode(content_bytes).decode("utf-8")
-    put_url = f"{api_base}/repos/{repo}/contents/{path}"
-    payload = {"message": commit_msg, "content": b64, "branch": branch}
-    if sha:
-        payload["sha"] = sha
-    resp = requests.put(put_url, headers=headers, data=json.dumps(payload))
-    if resp.status_code in (200, 201):
-        try:
-            data = resp.json()
-            html_url = data.get("content", {}).get("html_url", "")
-        except Exception:
-            html_url = ""
-        return True, html_url or f"https://github.com/{repo}/blob/{branch}/{path}"
-    return False, f"{resp.status_code}: {resp.text}"
+def _unique_preserve(seq: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for x in seq:
+        if x not in seen and x is not None and str(x).strip():
+            out.append(x)
+            seen.add(x)
+    return out
 
 
 def page_form():
     st.header("📝 表单录入（支持自动提交到 GitHub）")
-    st.markdown("先填写**赛事信息**，再在下方添加多条成绩后提交。")
-    with st.form("meet_form"):
+    st.markdown("先填写**赛事信息**，再点击 **“➕ 添加一条记录”** 逐条录入成绩。")
+
+    # 赛事信息
+    with st.form("meet_form_top", clear_on_submit=False):
         col1, col2 = st.columns(2)
         with col1:
             m_date = st.date_input("Date", value=date.today())
@@ -336,78 +317,144 @@ def page_form():
         with col2:
             m_meet = st.text_input("MeetName", value="Local Meet")
             m_length = st.selectbox("LengthMeters", options=[25, 50], index=1)
+        submitted_top = st.form_submit_button("保存赛事信息（继续录入成绩）")
+    # 记录列表在 session_state 里维护
+    if "rows" not in st.session_state:
+        st.session_state.rows = 1  # 默认一条
+    if "records_removed" not in st.session_state:
+        st.session_state.records_removed = False
 
-        st.markdown("---")
-        st.markdown("### 成绩记录")
-        # allow user to add multiple rows
-        num = st.number_input("本次要录入几条成绩？", min_value=1, max_value=30, value=3, step=1)
+    st.markdown("---")
+    st.subheader("成绩记录")
+
+    data_existing, _ = load_all_results()
+    events_from_repo = sorted(data_existing["EventName"].dropna().unique().tolist()) if ("EventName" in data_existing.columns and not data_existing.empty) else []
+    common_events = ["25m Freestyle","50m Freestyle","25m Breaststroke","50m Breaststroke","25m Butterfly","50m Butterfly","25m Backstroke","50m Backstroke"]
+    event_options = _unique_preserve(events_from_repo + common_events + ["自定义..."])
+
+    # 控制按钮
+    col_btn1, col_btn2 = st.columns([1,1])
+    with col_btn1:
+        if st.button("➕ 添加一条记录"):
+            st.session_state.rows += 1
+    with col_btn2:
+        if st.button("🧹 清空所有记录"):
+            st.session_state.rows = 1
+            # 也清理可能的键值，避免残留
+            for k in list(st.session_state.keys()):
+                if k.startswith(("name_", "eventopt_", "eventcustom_", "result_", "rank_", "note_")):
+                    del st.session_state[k]
+
+    to_delete = []
+
+    # 渲染每条记录
+    for i in range(st.session_state.rows):
+        st.markdown(f"**记录 {i+1}**")
+        c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.3, 1.0, 0.8, 1.2, 0.6])
+        with c1:
+            name = st.text_input(f"Name_{i+1}", value=st.session_state.get(f"name_{i}", "Anna"), key=f"name_{i}")
+        with c2:
+            chosen = st.selectbox(f"EventName_{i+1}", options=event_options, index=0 if event_options else 0, key=f"eventopt_{i}")
+            if chosen == "自定义...":
+                eventname = st.text_input(f"自定义 EventName_{i+1}", value=st.session_state.get(f"eventcustom_{i}", ""), key=f"eventcustom_{i}")
+            else:
+                eventname = chosen
+        with c3:
+            result = st.text_input(f"Result_{i+1}", value=st.session_state.get(f"result_{i}", ""), key=f"result_{i}", help="示例：0:20.42 或 1:02.45")
+        with c4:
+            rank = st.number_input(f"Rank_{i+1}", min_value=0, max_value=999, value=int(st.session_state.get(f"rank_{i}", 0)), step=1, key=f"rank_{i}")
+        with c5:
+            note = st.text_input(f"Note_{i+1}", value=st.session_state.get(f"note_{i}", ""), key=f"note_{i}")
+        with c6:
+            if st.button("🗑️ 删除", key=f"del_{i}"):
+                to_delete.append(i)
+
+        # 存到 session（保证 rerun 后值还在）
+        st.session_state[f"name_{i}"] = name
+        st.session_state[f"eventcustom_{i}"] = st.session_state.get(f"eventcustom_{i}", "") if chosen == "自定义..." else ""
+        st.session_state[f"result_{i}"] = result
+        st.session_state[f"rank_{i}"] = rank
+        st.session_state[f"note_{i}"] = note
+
+    # 处理删除（从后往前删索引才安全）
+    if to_delete:
+        for idx in sorted(to_delete, reverse=True):
+            # 清除该条的 state
+            for k in [f"name_{idx}", f"eventopt_{idx}", f"eventcustom_{idx}", f"result_{idx}", f"rank_{idx}", f"note_{idx}", f"del_{idx}"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.session_state.rows -= 1
+        st.experimental_rerun()
+
+    # 提交
+    push_github = st.checkbox("提交到 GitHub（免下载上传）", value=True, help="需要在 Settings → Secrets 配置 GITHUB_TOKEN 与 REPO。")
+    save_local = st.checkbox("同时保存到本地 meets/ 目录（调试用）", value=False)
+
+    if st.button("生成/提交"):
+        # 汇总记录
         recs = []
-        events_default = ["25m Breaststroke", "50m Butterfly", "25m Freestyle", "50m Freestyle"]
-        for i in range(int(num)):
-            st.markdown(f"**记录 {i+1}**")
-            c1, c2, c3, c4, c5 = st.columns([1.2, 1.3, 1.0, 0.8, 1.2])
-            with c1:
-                name = st.text_input(f"Name_{i+1}", value="Anna", key=f"name_{i}")
-            with c2:
-                eventname = st.selectbox(f"EventName_{i+1}", options=events_default, index=min(i, len(events_default)-1), key=f"event_{i}")
-            with c3:
-                result = st.text_input(f"Result_{i+1}", value="0:20.42", key=f"result_{i}", help="格式示例：0:20.42 或 1:02.45")
-            with c4:
-                rank = st.number_input(f"Rank_{i+1}", min_value=0, max_value=999, value=0, step=1, key=f"rank_{i}")
-            with c5:
-                note = st.text_input(f"Note_{i+1}", value="", key=f"note_{i}")
-            recs.append({"Name": name, "EventName": eventname, "Result": result, "Rank": rank, "Note": note})
+        for i in range(st.session_state.rows):
+            name = st.session_state.get(f"name_{i}", "").strip()
+            eventopt = st.session_state.get(f"eventopt_{i}", "").strip()
+            eventcustom = st.session_state.get(f"eventcustom_{i}", "").strip()
+            eventname = eventcustom if eventopt == "自定义..." and eventcustom else eventopt
+            result = st.session_state.get(f"result_{i}", "").strip()
+            rank = st.session_state.get(f"rank_{i}", 0)
+            note = st.session_state.get(f"note_{i}", "").strip()
+            # 过滤空的
+            if name and eventname and result:
+                recs.append({"Name": name, "EventName": eventname, "Result": result, "Rank": int(rank), "Note": note})
 
-        push_github = st.checkbox("提交到 GitHub（免下载上传）", value=True, help="需要在 Settings → Secrets 配置 GITHUB_TOKEN 与 REPO。")
-        save_local = st.checkbox("同时保存到本地 meets/ 目录（调试用）", value=False)
+        if not recs:
+            st.error("请至少填写一条完整记录（Name、EventName、Result 必填）。")
+            return
 
-        submitted = st.form_submit_button("生成/提交")
-        if submitted:
-            # Build DataFrames
-            meta_df = pd.DataFrame([{
-                "Date": m_date.strftime("%Y-%m-%d"),
-                "City": m_city,
-                "MeetName": m_meet,
-                "PoolName": m_pool,
-                "LengthMeters": int(m_length),
-            }])
-            results_df = pd.DataFrame(recs, columns=["Name","EventName","Result","Rank","Note"])
-            # Attach folder root
-            folder = f"meets/{m_date.strftime('%Y-%m-%d')}_{m_city}"
-            os.makedirs(folder, exist_ok=True)
+        # 赛事信息
+        meta_df = pd.DataFrame([{
+            "Date": m_date.strftime("%Y-%m-%d"),
+            "City": m_city,
+            "MeetName": m_meet,
+            "PoolName": m_pool,
+            "LengthMeters": int(m_length),
+        }])
+        results_df = pd.DataFrame(recs, columns=["Name","EventName","Result","Rank","Note"])
 
-            # Save local if selected
-            if save_local:
-                meta_df.to_csv(os.path.join(folder, "meta.csv"), index=False)
-                results_df.to_csv(os.path.join(folder, "results.csv"), index=False)
-                st.success(f"已写入本地： {folder}/meta.csv, results.csv")
+        # 文件夹
+        folder = f"meets/{m_date.strftime('%Y-%m-%d')}_{m_city}"
+        os.makedirs(folder, exist_ok=True)
 
-            # Push to GitHub
-            if push_github:
-                token = st.secrets.get("GITHUB_TOKEN", "")
-                repo = st.secrets.get("REPO", "")
-                branch = st.secrets.get("BRANCH", "main")
-                if not token or not repo:
-                    st.error("缺少 Secrets：['GITHUB_TOKEN', 'REPO']。请在 Streamlit Cloud - App - Settings - Secrets 中配置。")
+        # 本地保存
+        if save_local:
+            meta_df.to_csv(os.path.join(folder, "meta.csv"), index=False)
+            results_df.to_csv(os.path.join(folder, "results.csv"), index=False)
+            st.success(f"已写入本地： {folder}/meta.csv, results.csv")
+
+        # 推 GitHub
+        if push_github:
+            token = st.secrets.get("GITHUB_TOKEN", "")
+            repo = st.secrets.get("REPO", "")
+            branch = st.secrets.get("BRANCH", "main")
+            if not token or not repo:
+                st.error("缺少 Secrets：['GITHUB_TOKEN', 'REPO']。请在 Streamlit Cloud - App - Settings - Secrets 中配置。")
+            else:
+                ok_all = True
+                ok1, msg1 = push_to_github(token, repo, branch, f"{folder}/meta.csv", meta_df.to_csv(index=False).encode("utf-8"),
+                                           f"Add/Update {folder}/meta.csv")
+                if not ok1:
+                    ok_all = False
+                ok2, msg2 = push_to_github(token, repo, branch, f"{folder}/results.csv", results_df.to_csv(index=False).encode("utf-8"),
+                                           f"Add/Update {folder}/results.csv")
+                if not ok2:
+                    ok_all = False
+                if ok_all:
+                    st.success(f"已写入 GitHub：{folder}/meta.csv, results.csv")
+                    if msg1:
+                        st.write(msg1)
+                    if msg2:
+                        st.write(msg2")
                 else:
-                    ok_all = True
-                    ok1, msg1 = push_to_github(token, repo, branch, f"{folder}/meta.csv", meta_df.to_csv(index=False).encode("utf-8"),
-                                               f"Add/Update {folder}/meta.csv")
-                    if not ok1:
-                        ok_all = False
-                    ok2, msg2 = push_to_github(token, repo, branch, f"{folder}/results.csv", results_df.to_csv(index=False).encode("utf-8"),
-                                               f"Add/Update {folder}/results.csv")
-                    if not ok2:
-                        ok_all = False
-                    if ok_all:
-                        st.success(f"已写入 GitHub：{folder}/meta.csv, results.csv")
-                        if msg1:
-                            st.write(msg1)
-                        if msg2:
-                            st.write(msg2)
-                    else:
-                        st.error("推送到 GitHub 失败：")
-                        st.code(f"meta → {ok1}: {msg1}\nresults → {ok2}: {msg2}")
+                    st.error("推送到 GitHub 失败：")
+                    st.code(f"meta → {ok1}: {msg1}\nresults → {ok2}: {msg2}")
 
 
 def main():
