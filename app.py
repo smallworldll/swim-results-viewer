@@ -274,7 +274,8 @@ def section_results_and_manage():
     # Ensure widget keys exist and new rows inherit the selected event
     for i in range(1, int(rows_n)+1):
         # Default athlete name is "Anna" (only when key is missing)
-        st.session_state.setdefault(f"Name_{i}", "Anna")
+        if f"Name_{i}" not in st.session_state:
+            st.session_state[f"Name_{i}"] = "Anna" if i == 1 else ""
         # Force EventName of each row to follow the selector above
         st.session_state[f"EventName_{i}"] = selected_event
         # Other fields start empty by default
