@@ -138,7 +138,7 @@ def list_meets() -> pd.DataFrame:
     return pd.DataFrame(columns=["Date", "City", "MeetName", "PoolName", "LengthMeters", "Folder"])
 
 
-def highlighted_style(df: pd.DataFrame, meta: pd.Series) -> pd.io.formats.style.Styler:
+def highlighted_style(df: pd.DataFrame, meta: pd.Series) -> object:
     """
     对最佳成绩高亮：同一个人、同一项目、同一池长（LengthMeters）的最小秒数标红。
     """
