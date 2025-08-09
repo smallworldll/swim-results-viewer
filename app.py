@@ -1,11 +1,12 @@
 # app.py
 # -*- coding: utf-8 -*-
 import os
+import re
 import io
 import json
 import base64
 import datetime as dt
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Set
 
 import requests
 import pandas as pd
@@ -27,21 +28,26 @@ DEFAULT_EVENTS = [
     "50m Freestyle",
     "100m Freestyle",
     "200m Freestyle",
+    "400m Freestyle",
     # Backstroke
     "25m Backstroke",
     "50m Backstroke",
     "100m Backstroke",
+    "200m Backstroke",
     # Breaststroke
     "25m Breaststroke",
     "50m Breaststroke",
     "100m Breaststroke",
+    "200m Breaststroke",
     # Butterfly
     "25m Butterfly",
     "50m Butterfly",
     "100m Butterfly",
+    "200m Butterfly",
     # IM
     "100m IM",
     "200m IM",
+    "400m IM",
 ]
 
 # 高亮颜色（不同选手）
@@ -52,6 +58,7 @@ HIGHLIGHT_COLORS = [
     "#ff7f0e",  # orange
     "#9467bd",  # purple
     "#8c564b",  # brown
+    "#17becf",  # teal
 ]
 
 # -----------------------------
@@ -69,7 +76,7 @@ def parse_time_to_seconds(x: str) -> Optional[float]:
     try:
         if ":" in s:
             # m:ss.xx 或 mm:ss
-            m, rest = s.split(":")
+            m, rest = s.split(":", 1)
             m = int(m)
             sec = float(rest)
             return m * 60 + sec
@@ -89,6 +96,19 @@ def format_seconds_to_mmss(seconds: Optional[float]) -> str:
         return f"{m}:{s:05.2f}"
     except Exception:
         return "None"
+
+
+# -----------------------------
+# 路径/命名工具
+# -----------------------------
+def sanitize_segment(seg: str) -> str:
+    """
+    保留中文/英文/数字/空格/下划线/连字符/括号/点号，把多空格压成一个，再把空格换成下划线。
+    """
+    seg = (seg or "").strip()
+    seg = re.sub(r"\s+", " ", seg)
+    seg = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9 _\-\(\)\.]", "", seg)
+    return seg.replace(" ", "_")
 
 
 # -----------------------------
@@ -118,14 +138,21 @@ def read_meta(meet_dir: str) -> pd.Series:
     df = pd.read_csv(p)
     if df.empty:
         return pd.Series(dtype="object")
-    return df.iloc[0]
+    # 只取第一行，确保列顺序
+    cols = ["Date", "City", "MeetName", "PoolName", "LengthMeters"]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = None
+    return df[cols].iloc[0]
 
 
 def write_meta(meet_dir: str, meta: Dict) -> None:
     """写 meta.csv"""
     ensure_dir(os.path.join(MEETS_ROOT, meet_dir))
     df = pd.DataFrame([meta])
-    df.to_csv(os.path.join(MEETS_ROOT, meet_dir, META_FILE), index=False)
+    # 统一列顺序
+    df = df[["Date", "City", "MeetName", "PoolName", "LengthMeters"]]
+    df.to_csv(os.path.join(MEETS_ROOT, meet_dir, META_FILE), index=False, encoding="utf-8-sig")
 
 
 def read_results(meet_dir: str) -> pd.DataFrame:
@@ -140,12 +167,17 @@ def read_results(meet_dir: str) -> pd.DataFrame:
     return df[["Name", "EventName", "Result", "Rank", "Note"]]
 
 
+def write_results(meet_dir: str, df: pd.DataFrame) -> None:
+    p = os.path.join(MEETS_ROOT, meet_dir, RESULTS_FILE)
+    df.to_csv(p, index=False, encoding="utf-8-sig")
+
+
 def append_results(meet_dir: str, rows: List[Dict]) -> None:
     """追加写入 results.csv"""
     df_old = read_results(meet_dir)
     df_new = pd.DataFrame(rows)
     df = pd.concat([df_old, df_new], ignore_index=True)
-    df.to_csv(os.path.join(MEETS_ROOT, meet_dir, RESULTS_FILE), index=False)
+    write_results(meet_dir, df)
 
 
 def aggregate_all_results() -> pd.DataFrame:
@@ -289,37 +321,50 @@ def push_meet_to_github(meet_dir: str) -> Tuple[bool, str]:
 
 
 # -----------------------------
-# UI：查询/对比
+# 高亮与图表辅助
 # -----------------------------
-def style_seed_by_person(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def compute_seed_indices(df: pd.DataFrame) -> Set[int]:
     """
-    对表格逐行着色：同一人 + 同一项目 + 同一池长 的最佳（最小秒）标色；
-    多人时每人一种颜色。
+    返回当前 DataFrame 中“最佳成绩”的行索引集合：
+    按 (Name, EventName, LengthMeters) 分组，ResultSeconds 最小的行视为种子成绩。
     """
-    if df.empty:
-        return df.style
+    seeds: Set[int] = set()
+    if df.empty or "ResultSeconds" not in df.columns:
+        return seeds
+    g = df.dropna(subset=["ResultSeconds"]).groupby(["Name", "EventName", "LengthMeters"])
+    for _, sub in g:
+        idx = sub["ResultSeconds"].idxmin()
+        seeds.add(idx)
+    return seeds
 
-    people = df["Name"].fillna("Unknown").unique().tolist()
+
+def apply_seed_style(df_disp: pd.DataFrame, seed_indices: Set[int]) :
+    """
+    仅对 Result 列应用高亮；不同选手不同颜色（按 Name）。
+    df_disp 必须包含 Name 列；其 index 与源 df 一致。
+    """
+    if df_disp.empty:
+        return df_disp.style
+
+    people = df_disp["Name"].fillna("Unknown").unique().tolist()
     color_map = {n: HIGHLIGHT_COLORS[i % len(HIGHLIGHT_COLORS)] for i, n in enumerate(people)}
 
-    # 计算分组最小秒
-    grp_min = (
-        df.groupby(["Name", "EventName", "LengthMeters"])["ResultSeconds"]
-        .transform(lambda x: x.min(skipna=True))
-    )
-    is_seed = (df["ResultSeconds"] == grp_min)
-
     def row_style(row):
-        if pd.isna(row.get("ResultSeconds")):
-            return [""] * len(row)
-        if is_seed.loc[row.name]:
-            c = color_map.get(row["Name"], "#d62728")
-            return [f"color: {c}; font-weight: 700"] * len(row)
-        return [""] * len(row)
+        styles = []
+        for col in df_disp.columns:
+            if (row.name in seed_indices) and (col == "Result"):
+                c = color_map.get(row.get("Name"), "#d62728")
+                styles.append(f"color: {c}; font-weight: 700")
+            else:
+                styles.append("")
+        return styles
 
-    return df.style.apply(row_style, axis=1)
+    return df_disp.style.apply(row_style, axis=1)
 
 
+# -----------------------------
+# UI：查询/对比
+# -----------------------------
 def page_browse():
     st.header("🏊 游泳成绩查询 / 对比")
 
@@ -368,22 +413,23 @@ def page_browse():
             pass
 
     # 展示表格（带高亮）
-    show_df = f.copy()
-    if not show_df.empty:
-        show_df["Date"] = show_df["Date"].dt.strftime("%Y-%m-%d")
-        show_df["ResultFmt"] = show_df["ResultSeconds"].apply(format_seconds_to_mmss)
-        show_df = show_df[
-            ["Name", "Date", "EventName", "ResultFmt", "Rank", "Note", "PoolName", "City", "LengthMeters", "MeetFolder"]
-        ].rename(columns={"ResultFmt": "Result"})
+    if not f.empty:
+        # 准备显示列
+        disp = f.copy()
+        disp["Date"] = disp["Date"].dt.strftime("%Y-%m-%d")
+        disp["Result"] = disp["ResultSeconds"].apply(format_seconds_to_mmss)
+        disp = disp[["Name", "Date", "EventName", "Result", "Rank", "Note", "PoolName", "City", "LengthMeters", "MeetFolder"]]
+        # 计算种子索引，并套用到 disp（索引一致）
+        seeds = compute_seed_indices(f)
+        styled = apply_seed_style(disp, seeds)
         st.subheader("📑 比赛记录")
-        st.dataframe(style_seed_by_person(f)[["Name", "Date", "EventName", "Result", "Rank", "Note", "PoolName", "City", "LengthMeters", "MeetFolder"]], use_container_width=True)
+        st.dataframe(styled, use_container_width=True)
     else:
         st.warning("当前条件下没有数据。")
 
     # 折线图（同一项目的趋势图）
     if not f.empty:
         st.subheader("📈 成绩折线图（单位：秒，越低越好）")
-        # 限制：为了可读，建议单项目展示
         if event == "All":
             st.info("请选择具体的 Event 以绘制趋势图。")
         else:
@@ -391,12 +437,11 @@ def page_browse():
             if f2.empty:
                 st.info("没有可绘图的成绩。")
             else:
-                # 以日期为 x，按 Name 分组列
                 pivot = (
                     f2.pivot_table(index="Date", columns="Name", values="ResultSeconds", aggfunc="min")
                     .sort_index()
                 )
-                st.line_chart(pivot, height=300)
+                st.line_chart(pivot, height=320)
 
 
 # -----------------------------
@@ -412,17 +457,20 @@ def page_manage():
     if mode == "新建赛事":
         with st.form("new_meet"):
             date_val = st.date_input("Date", value=dt.date.today())
-            city = st.text_input("City", value="")
-            poolname = st.text_input("PoolName", value="")
+            city_raw = st.text_input("City", value="")
+            pool_raw = st.text_input("PoolName", value="")
             length = st.number_input("LengthMeters", min_value=10, max_value=100, value=25, step=1)
             meet_name = st.text_input("MeetName", value="")
+            push_on_create = st.checkbox("创建后立即推送到 GitHub（推荐，避免丢失）", value=True)
             submit = st.form_submit_button("创建/保存赛事")
 
         if submit:
-            if not city or not poolname:
+            if not city_raw or not pool_raw:
                 st.error("City / PoolName 不能为空。")
             else:
-                meet_dir = f"{date_val.isoformat()}_{city}_{poolname}"
+                city = city_raw.strip()
+                poolname = pool_raw.strip()
+                meet_dir = f"{date_val.isoformat()}_{sanitize_segment(city)}_{sanitize_segment(poolname)}"
                 meta = {
                     "Date": str(date_val),
                     "City": city,
@@ -431,13 +479,14 @@ def page_manage():
                     "LengthMeters": int(length),
                 }
                 write_meta(meet_dir, meta)
+                # 确保 results.csv 存在（空表）
+                if not os.path.exists(os.path.join(MEETS_ROOT, meet_dir, RESULTS_FILE)):
+                    write_results(meet_dir, pd.DataFrame(columns=["Name","EventName","Result","Rank","Note"]))
                 st.success(f"已创建赛事：{meet_dir}")
-
-                # 立即推送 meta（可选）
-                if st.checkbox("提交到 GitHub（创建赛事也会推送）", value=True, key="push_new_meta"):
+                if push_on_create:
                     ok, msg = push_meet_to_github(meet_dir)
                     if ok:
-                        st.success("已推送到 GitHub。")
+                        st.success("（创建）已推送到 GitHub。")
                     else:
                         st.warning(f"GitHub 推送失败：{msg}")
 
@@ -477,7 +526,6 @@ def page_manage():
         if df_exist.empty:
             st.info("暂无成绩记录。")
         else:
-            # 方便查看：附上格式化秒
             tdf = df_exist.copy()
             tdf["ResultSeconds"] = tdf["Result"].apply(parse_time_to_seconds)
             tdf["ResultFmt"] = tdf["ResultSeconds"].apply(format_seconds_to_mmss)
@@ -489,10 +537,12 @@ def page_manage():
         # 录入成绩
         st.subheader("📝 新增成绩")
 
-        left, right = st.columns([1, 1])
+        left, right = st.columns([1.2, 0.8])
         with left:
-            event_choices = ["（自定义…）"] + DEFAULT_EVENTS
-            event_choice = st.selectbox("Event 选择", options=event_choices, index=1 if len(event_choices) > 1 else 0)
+            # 组合“已录项目” + “常用项目”（去重）
+            exist_events = sorted([x for x in df_exist["EventName"].dropna().unique().tolist() if x])
+            candidates = ["（自定义…）"] + sorted(set(exist_events + DEFAULT_EVENTS))
+            event_choice = st.selectbox("Event 选择", options=candidates, index=1 if len(candidates) > 1 else 0)
             if event_choice == "（自定义…）":
                 event_name = st.text_input("自定义 EventName")
             else:
@@ -501,7 +551,7 @@ def page_manage():
         with right:
             batch_n = st.number_input("本次录入行数", 1, 20, value=3, step=1)
 
-        st.caption("时间格式可填 34.12 或 0:34.12（系统会统一解析为秒再保存原始输入）。")
+        st.caption("时间格式可填 34.12 或 0:34.12（系统会统一解析为秒再格式化显示）。")
 
         rows = []
         for i in range(int(batch_n)):
@@ -556,5 +606,5 @@ def main():
 
 
 if __name__ == "__main__":
-    ensure_dir(MEETS_ROOT)
+    os.makedirs(MEETS_ROOT, exist_ok=True)
     main()
