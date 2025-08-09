@@ -271,19 +271,15 @@ def section_results_and_manage():
     rows_n = st.number_input("本次录入行数", min_value=1, max_value=10, value=1, step=1, key="rows_n")
     # ensure keys exist to avoid state errors
     for i in range(1, int(rows_n)+1):
-    # Make sure defaults exist; EventName follows the selected event; Name defaults to "Anna"
-    st.session_state.setdefault(f"Name_{i}", "Anna")
-    st.session_state.setdefault(f"EventName_{i}", selected_event)
-    for f in ("Result","Rank","Note"):
-        st.session_state.setdefault(f"{f}_{i}", "")
-
+        for f in ("Name","EventName","Result","Rank","Note"):
+            st.session_state.setdefault(f"{f}_{i}", "")
 
     inputs = []
     for i in range(1, int(rows_n)+1):
         st.markdown(f"**记录 {i}**")
         c1, c2, c3, c4 = st.columns([1.2,1.4,1.0,1.4])
         name = c1.text_input(f"Name_{i}", key=f"Name_{i}", value=st.session_state.get(f"Name_{i}", "Anna"), placeholder="选手名")
-        event_name = c2.text_input(f"EventName_{i}", key=f"EventName_{i}", value=st.session_state.get(f"EventName_{i}", selected_event), disabled=True)
+        event_name = c2.text_input(f"EventName_{i}", key=f"EventName_{i}", value=selected_event, disabled=True)
         result = c3.text_input(f"Result_{i}", key=f"Result_{i}", placeholder="34.12 或 0:34.12")
         rank = c4.text_input(f"Rank_{i}（可空）", key=f"Rank_{i}", value="")
         note = st.text_input(f"Note_{i}", key=f"Note_{i}", placeholder="可留空")
