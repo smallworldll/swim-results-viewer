@@ -278,7 +278,7 @@ def section_results_and_manage():
     for i in range(1, int(rows_n)+1):
         st.markdown(f"**记录 {i}**")
         c1, c2, c3, c4 = st.columns([1.2,1.4,1.0,1.4])
-        name = c1.text_input(f"Name_{i}", key=f"Name_{i}", placeholder="选手名")
+        name = c1.text_input(f"Name_{i}", key=f"Name_{i}", value=st.session_state.get(f"Name_{i}", "Anna"), placeholder="选手名")
         event_name = c2.text_input(f"EventName_{i}", key=f"EventName_{i}", value=selected_event)
         result = c3.text_input(f"Result_{i}", key=f"Result_{i}", placeholder="34.12 或 0:34.12")
         rank = c4.text_input(f"Rank_{i}（可空）", key=f"Rank_{i}", value="")
@@ -334,7 +334,10 @@ def page_query():
         st.info("暂无数据。")
         return
     data = pd.concat(frames, ignore_index=True)
-    data["Seconds"] = data["Seconds"] if "Seconds" in data.columns else data["Result"].map(parse_time_to_seconds)
+    if "Seconds" in data.columns:
+        data["Seconds"] = data["Seconds"].where(data["Seconds"].notna(), data["Result"].map(parse_time_to_seconds))
+    else:
+        data["Seconds"] = data["Result"].map(parse_time_to_seconds)
     data["Result"] = data["Seconds"].map(seconds_to_mssxx)
 
     names = sorted([x for x in data["Name"].dropna().unique().tolist() if str(x).strip()])
@@ -351,8 +354,8 @@ def page_query():
     if pick_event != "全部":
         q = q[q["EventName"] == pick_event]
     if pick_len != "全部":
-        target = int(pick_len)
-        q = q[pd.to_numeric(q["LengthMeters"], errors="coerce").round().astype("Int64") == target]
+        q = q[q["LengthMeters"].astype(str) == pick_len]
+
     q = q.sort_values(by=["Seconds","Date","Name"], ascending=[True, True, True])
     show_cols = ["Name","Date","EventName","Result","Rank","Note","City","PoolName","LengthMeters","MeetName"]
     show_cols = [c for c in show_cols if c in q.columns]
