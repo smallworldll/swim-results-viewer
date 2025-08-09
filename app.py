@@ -219,34 +219,46 @@ def page_manage():
 
     tab_sel, tab_new = st.tabs(["选择已有赛事/录入", "新建赛事"])
 
-    with tab_new:
-        st.subheader("新建赛事")
-        c1, c2 = st.columns(2)
-        dt = c1.date_input("Date", value=date.today())
-        city = c2.text_input("City", value="")
-        meet_name = st.text_input("MeetName", value="")
-        pool_name = st.text_input("PoolName", value="")
-        length = st.number_input("LengthMeters", min_value=0, step=25, value=50)
-        if st.button("创建赛事文件夹", type="primary"):
-            ensure_root()
-            dstr = dt.strftime("%Y-%m-%d")
-            folder = folder_from_meta(dstr, sanitize_segment(city), sanitize_segment(pool_name))
-            dirpath = os.path.join(MEETS_ROOT, folder)
-            os.makedirs(dirpath, exist_ok=True)
+    
+with tab_new:
+    st.subheader("新建赛事")
+    c1, c2 = st.columns(2)
+    dt = c1.date_input("Date", value=date.today())
+    city = c2.text_input("City", value="")
+    meet_name = st.text_input("MeetName", value="")
+    pool_name = st.text_input("PoolName", value="")
+    length = st.number_input("LengthMeters", min_value=0, step=25, value=50)
+    push_now = st.checkbox("创建后立即推送到 GitHub（推荐，避免丢失）", value=True,
+                           help="需要在 Secrets 配置 GITHUB_TOKEN 与 REPO；会创建 meta.csv 与空的 results.csv 并提交。")
 
-            meta_df = pd.DataFrame([{
-                "Date": dstr,
-                "City": city,
-                "MeetName": meet_name,
-                "PoolName": pool_name,
-                "LengthMeters": int(length)
-            }])
-            write_meta(dirpath, meta_df)
-            # 初始化空 results.csv
-            write_results(dirpath, read_results(dirpath))
+    if st.button("创建赛事文件夹", type="primary"):
+        ensure_root()
+        dstr = dt.strftime("%Y-%m-%d")
+        folder = folder_from_meta(dstr, sanitize_segment(city), sanitize_segment(pool_name))
+        dirpath = os.path.join(MEETS_ROOT, folder)
+        os.makedirs(dirpath, exist_ok=True)
 
-            st.success(f"已创建：{dirpath}")
-            st.info("现在切换到“选择已有赛事/录入”标签进行成绩录入。")
+        meta_df = pd.DataFrame([{
+            "Date": dstr,
+            "City": city,
+            "MeetName": meet_name,
+            "PoolName": pool_name,
+            "LengthMeters": int(length)
+        }])
+        write_meta(dirpath, meta_df)
+        # 初始化空 results.csv
+        write_results(dirpath, read_results(dirpath))
+
+        st.success(f"已创建：{dirpath}")
+        # 可选：立即推送到 GitHub，确保即使没有录入成绩也会持久保存
+        if push_now:
+            try:
+                push_meet_to_github(folder, message=f"Create {folder}")
+            except Exception as e:
+                st.warning(f"GitHub 推送失败：{e}")
+
+        st.info("现在切换到“选择已有赛事/录入”标签进行成绩录入。")
+
 
     with tab_sel:
         st.subheader("选择已有赛事并录入")
@@ -448,3 +460,18 @@ def main():
 
 if __name__ == "__main__":
     main()
+def common_events() -> list:
+    """Return a list of commonly used swimming events."""
+    base = []
+    # Freestyle
+    for d in [25, 50, 100, 200, 400]:
+        base.append(f"{d}m Freestyle")
+    # Backstroke / Breaststroke / Butterfly
+    for stroke in ["Backstroke", "Breaststroke", "Butterfly"]:
+        for d in [25, 50, 100, 200]:
+            base.append(f"{d}m {stroke}")
+    # Individual Medley
+    for d in [100, 200, 400]:
+        base.append(f"{d}m IM")
+    return base
+
