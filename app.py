@@ -155,8 +155,7 @@ def write_results_and_push(meet_dir: Path, df: pd.DataFrame, message: str):
     p = meet_dir / "results.csv"
     df = df.copy()
     # normalize time columns
-    df["Seconds"] = (df["Seconds"] if "Seconds" in df.columns else df["Result"].map(parse_time_to_seconds))
-        df["Seconds"] = df["Seconds"].where(df["Seconds"].notna(), df["Result"].map(parse_time_to_seconds))
+    df["Seconds"] = df["Seconds"] if "Seconds" in df.columns else df["Result"].map(parse_time_to_seconds)
     df["Result"] = df["Seconds"].map(seconds_to_mssxx)
     df.to_csv(p, index=False, encoding="utf-8-sig")
     push_to_github(str(p).replace("\\","/"), p.read_bytes(), message)
@@ -280,7 +279,7 @@ def section_results_and_manage():
         st.markdown(f"**记录 {i}**")
         c1, c2, c3, c4 = st.columns([1.2,1.4,1.0,1.4])
         name = c1.text_input(f"Name_{i}", key=f"Name_{i}", placeholder="选手名")
-        event_name = c2.text_input(f"EventName_{i}", key=f"EventName_{i}", value=selected_event, disabled=True)
+        event_name = c2.text_input(f"EventName_{i}", key=f"EventName_{i}", value=selected_event)
         result = c3.text_input(f"Result_{i}", key=f"Result_{i}", placeholder="34.12 或 0:34.12")
         rank = c4.text_input(f"Rank_{i}（可空）", key=f"Rank_{i}", value="")
         note = st.text_input(f"Note_{i}", key=f"Note_{i}", placeholder="可留空")
