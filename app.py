@@ -354,7 +354,12 @@ def page_query():
     if pick_event != "全部":
         q = q[q["EventName"] == pick_event]
     if pick_len != "全部":
-        q = q[q["LengthMeters"].astype(str) == pick_len]
+        # 强健的泳池长度筛选（兼容 25/50 和 25.0/50.0 等）
+        try:
+            pick_len_int = int(pick_len)
+            q = q[pd.to_numeric(q["LengthMeters"], errors="coerce").round().astype("Int64") == pick_len_int]
+        except Exception:
+            pass
 
     q = q.sort_values(by=["Seconds","Date","Name"], ascending=[True, True, True])
     show_cols = ["Name","Date","EventName","Result","Rank","Note","City","PoolName","LengthMeters","MeetName"]
