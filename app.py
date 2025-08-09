@@ -108,7 +108,7 @@ def read_meta(folder: str) -> pd.Series:
             df[c] = ""
     return df.iloc[0]
 
-def write_meta(date_str: str, city: str, meet: str, pool: str, length: int, event_required: str):
+def write_meta(date_str: str, city: str, meet: str, pool: str, length: int):
     folder = meet_folder_name(date_str, city, pool)
     d = ROOT / folder
     d.mkdir(parents=True, exist_ok=True)
@@ -118,8 +118,7 @@ def write_meta(date_str: str, city: str, meet: str, pool: str, length: int, even
         "MeetName": meet,
         "PoolName": pool,
         "LengthMeters": int(length),
-        "EventName": event_required,  # per your rule: EventName + PoolName required at creation
-    }], columns=["Date","City","MeetName","PoolName","LengthMeters","EventName"])
+    }], columns=["Date","City","MeetName","PoolName","LengthMeters"])
     meta.to_csv(d / "meta.csv", index=False, encoding="utf-8-sig")
     return folder
 
@@ -183,20 +182,25 @@ def page_manage():
         pool = st.text_input("PoolName（必填）", value="")
     with c5:
         length = st.selectbox("LengthMeters", [25,50], index=0)
-    with c6:
-        ev_default = st.text_input("EventName（必填，作为本场默认项目）", value="100m Freestyle")
 
     push_meta = st.checkbox("保存时推送到 GitHub", value=False)
 
-    if st.button("保存赛事信息（写入/推送 meta.csv）", type="primary"):
-        if not pool.strip() or not ev_default.strip():
-            st.error("PoolName 与 EventName 不能为空。")
+    if st.button("保存赛事信息（写入/推送 meta.csv)"):
+        if not meet or not pool:
+            st.error("请填写 MeetName 和 PoolName 后再保存")
         else:
-            folder = write_meta(d.strftime("%Y-%m-%d"), city.strip(), meet.strip(), pool.strip(), int(length), ev_default.strip())
-            st.success(f"已保存：meets/{folder}/meta.csv")
+            folder = write_meta(date_str, city, meet, pool, length)
+            st.success(f"已保存： meets/{folder}/meta.csv")
             if push_meta:
-                ok, msg = github_upsert(f"meets/{folder}/meta.csv", (ROOT/folder/"meta.csv").read_bytes(), f"Save meta for {folder}")
-                st.info("GitHub: " + ("已推送" if ok else f"失败：{msg}"))
+                ok, msg = github_upsert(
+                    f"meets/{folder}/meta.csv",
+                    (ROOT / folder / "meta.csv").read_bytes(),
+                    f"Save meta for {folder}"
+                )
+                if ok:
+                    st.info("GitHub: 已推送")
+                else:
+                    st.warning(f"GitHub 推送失败（{msg}）")
 
     st.divider()
 
