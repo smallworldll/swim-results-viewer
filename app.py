@@ -147,6 +147,8 @@ def load_results(meet_dir: Path) -> pd.DataFrame:
         return pd.DataFrame(columns=["Name","EventName","Result","Rank","Note","Seconds",
                                      "Date","City","MeetName","PoolName","LengthMeters"])
     df = pd.read_csv(p)
+    df['Result'] = df['Result'].astype(str)  # 确保可编辑
+
     if "Seconds" not in df.columns and "Result" in df.columns:
         df["Seconds"] = df["Result"].map(parse_time_to_seconds)
     return df
@@ -334,6 +336,8 @@ def page_query():
         st.info("暂无数据。")
         return
     data = pd.concat(frames, ignore_index=True)
+    data['EventName'] = data['EventName'].astype(str).str.strip()
+    data['Name'] = data['Name'].astype(str).str.strip()
     data["Seconds"] = data["Seconds"] if "Seconds" in data.columns else data["Result"].map(parse_time_to_seconds)
     data["Result"] = data["Seconds"].map(seconds_to_mssxx)
 
@@ -349,9 +353,9 @@ def page_query():
     if pick_names:
         q = q[q["Name"].isin(pick_names)]
     if pick_event != "全部":
-        q = q[q["EventName"] == pick_event]
+        q = q[q['EventName'].astype(str).str.strip().str.casefold() == pick_event.strip().casefold()]
     if pick_len != "全部":
-        q = q[q["LengthMeters"].astype(str) == pick_len]
+        q = q[q['LengthMeters'].astype(str) == str(pick_len)]
 
     q = q.sort_values(by=["Seconds","Date","Name"], ascending=[True, True, True])
     show_cols = ["Name","Date","EventName","Result","Rank","Note","City","PoolName","LengthMeters","MeetName"]
