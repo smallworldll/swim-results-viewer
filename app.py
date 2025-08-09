@@ -1,429 +1,403 @@
-# -*- coding: utf-8 -*-
-"""
-游泳成绩系统（赛事制） - 精简稳固版
-修复点：
-- 保存后清空输入，不再出现 Streamlit safe_session_state 相关报错
-- 结果写入采用合并去重，防止重复保存
-- 支持 34.12 / 0:34.12 两种时间输入，统一规范化
-- “已登记记录”放在新增成绩之前；删除更直观
-- meta 不含 EventName；PoolName/MeetName 为必填；LengthMeters 只允许 25/50
-"""
 
-from __future__ import annotations
-import streamlit as st
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import datetime, date
-import re
-import base64
+import os
+import io
 import json
+import base64
 import requests
+import datetime as dt
+from pathlib import Path
 
-APP_TITLE = "🏊‍♂️ 游泳成绩系统（赛事制）"
-MEETS_ROOT = Path("meets")
+import pandas as pd
+import streamlit as st
 
-# =====================
-# 辅助：时间解析/规范化
-# =====================
-TIME_RE = re.compile(r"^\s*(?:(\d{1,2}):)?(\d{1,2})(?:[.:](\d{1,2}))?\s*$")
+# ---------------------------
+# Config
+# ---------------------------
+st.set_page_config(page_title="游泳成绩系统（赛事制）", layout="wide")
 
-def parse_time_to_seconds(s: str) -> float | None:
-    """接受 '34.12' 或 '0:34.12' 或 '1:05.3'，返回秒(float)，不合法返回 None"""
-    if not isinstance(s, str):
-        return None
-    s = s.strip()
+MEETS_ROOT = Path("meets")  # relative to repo root
+
+# Standard events for dropdowns
+STANDARD_EVENTS = [
+    "25m Freestyle", "25m Backstroke", "25m Breaststroke", "25m Butterfly",
+    "50m Freestyle", "50m Backstroke", "50m Breaststroke", "50m Butterfly",
+    "100m Freestyle", "100m Backstroke", "100m Breaststroke", "100m Butterfly",
+    "200m Freestyle", "200m Backstroke", "200m Breaststroke", "200m Butterfly",
+    "200m IM", "400m Freestyle", "400m IM"
+]
+
+# ---------------------------
+# Helpers
+# ---------------------------
+
+def ensure_meets_root():
+    MEETS_ROOT.mkdir(exist_ok=True)
+
+def meet_folder_name(date_str: str, city: str, poolname: str) -> str:
+    # 2025-08-09_Chiang Mai_National Sports University Chiang Mai Campus
+    safe_city = city.replace("/", "_").strip()
+    safe_pool = poolname.replace("/", "_").strip()
+    return f"{date_str}_{safe_city}_{safe_pool}"
+
+def parse_time_to_display_and_seconds(s: str):
+    """Accept '34.12' or '0:34.12' or '1:02.45'. Return ('m:ss.xx', seconds float)."""
+    s = (s or "").strip()
     if not s:
-        return None
-    m = TIME_RE.match(s)
-    if not m:
-        return None
-    mm = m.group(1)
-    ss = m.group(2)
-    ff = m.group(3)
-    minutes = int(mm) if mm is not None else 0
-    seconds = int(ss)
-    hundredths = int(ff) if ff is not None else 0
-    # 如果给了 1 位小数，视为十分位（补 0）；给 2 位按百分位；超过 2 位截断
-    if ff is not None and len(ff) == 1:
-        hundredths *= 10
-    return minutes * 60 + seconds + hundredths / 100.0
+        return "", None
+    # normalize decimals
+    try:
+        if ":" in s:
+            # m:ss.xx
+            parts = s.split(":")
+            if len(parts) == 2:
+                m = int(parts[0])
+                sec = float(parts[1])
+            else:
+                # h:mm:ss.xx -> convert to minutes
+                h = int(parts[0])
+                m = int(parts[1]) + 60 * h
+                sec = float(parts[2])
+        else:
+            # "34.12" -> 0:34.12
+            m = 0
+            sec = float(s)
+        total = m * 60 + sec
+        # format
+        mm = int(total // 60)
+        ss = total - mm * 60
+        display = f"{mm}:{ss:05.2f}"
+        return display, round(total, 2)
+    except Exception:
+        return s, None
 
-def seconds_to_mssxx(sec: float) -> str:
-    """将秒转成 m:ss.xx 统一显示"""
-    if sec is None or np.isnan(sec):
-        return ""
-    sec = float(sec)
-    minutes = int(sec // 60)
-    rest = sec - minutes * 60
-    s = int(rest)
-    hundredths = int(round((rest - s) * 100))
-    # 有时四舍五入会到 .100，进位处理
-    if hundredths == 100:
-        hundredths = 0
-        s += 1
-        if s == 60:
-            s = 0
-            minutes += 1
-    return f"{minutes}:{s:02d}.{hundredths:02d}"
+def gh_headers():
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    return {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json"
+    }
 
-# =====================
-# 文件 I/O
-# =====================
-def load_meta(meet_dir: Path) -> pd.Series:
-    p = meet_dir / "meta.csv"
-    if not p.exists():
-        return pd.Series(dtype=object)
-    df = pd.read_csv(p)
-    if df.empty:
-        return pd.Series(dtype=object)
-    return df.iloc[0]
+def gh_repo():
+    return st.secrets.get("REPO", "")  # e.g., "smallworlddll/swim-results-viewer"
 
-def save_meta(meet_dir: Path, date_str: str, city: str, meet_name: str, pool_name: str, length_m: int):
-    meet_dir.mkdir(parents=True, exist_ok=True)
-    meta = pd.DataFrame([{
-        "Date": date_str,
-        "City": city,
-        "MeetName": meet_name,
-        "PoolName": pool_name,
-        "LengthMeters": int(length_m),
-    }])
-    meta.to_csv(meet_dir / "meta.csv", index=False, encoding="utf-8-sig")
+def gh_api_url(path: str):
+    return f"https://api.github.com/repos/{gh_repo()}/contents/{path}"
 
-def load_results(meet_dir: Path) -> pd.DataFrame:
-    p = meet_dir / "results.csv"
-    if not p.exists():
-        return pd.DataFrame(columns=["Name","EventName","Result","Rank","Note",
-                                     "Date","City","MeetName","PoolName","LengthMeters","Seconds"])
-    df = pd.read_csv(p)
-    # 确保 Seconds 存在
-    if "Seconds" not in df.columns and "Result" in df.columns:
-        secs = df["Result"].map(parse_time_to_seconds)
-        df["Seconds"] = secs
-    return df
+def push_to_github(path: str, content_bytes: bytes, commit_message: str):
+    """Create or update a file via GitHub API. Always attempt when token/repo present."""
+    repo = gh_repo()
+    token = st.secrets.get("GITHUB_TOKEN", "")
+    if not repo or not token:
+        # show a gentle warn
+        st.info("⚠️ 未配置 GITHUB_TOKEN/REPO，已跳过 GitHub 推送（本地已保存）。")
+        return False, "NO_SECRET"
 
-def _norm_col(s: pd.Series) -> pd.Series:
-    return s.fillna("").astype(str).str.strip().str.lower()
+    url = gh_api_url(path)
+    headers = gh_headers()
 
-def write_results_dedup(meet_dir: Path, df_new: pd.DataFrame):
-    """合并去重写入 results.csv"""
-    p = meet_dir / "results.csv"
-    if p.exists():
-        df_all = pd.concat([pd.read_csv(p), df_new], ignore_index=True)
-    else:
-        df_all = df_new.copy()
-
-    # 去重键：人+项目+成绩+日期+城市+场馆+池长
-    parts = [
-        _norm_col(df_all["Name"]),
-        _norm_col(df_all["EventName"]),
-        _norm_col(df_all["Result"]),
-        _norm_col(df_all.get("Date","")),
-        _norm_col(df_all.get("City","")),
-        _norm_col(df_all.get("MeetName","")),
-        _norm_col(df_all.get("PoolName","")),
-        _norm_col(df_all.get("LengthMeters","")),
-    ]
-    df_all["__k__"] = "|".join(parts) if isinstance(parts, str) else parts[0]
-    # 如果不是字符串拼接，上面返回的是 Series 列表，正确写法：
-    if "__k__" in df_all.columns and not isinstance(df_all["__k__"], pd.Series):
-        df_all["__k__"] = (
-            _norm_col(df_all["Name"]) + "|" +
-            _norm_col(df_all["EventName"]) + "|" +
-            _norm_col(df_all["Result"]) + "|" +
-            _norm_col(df_all.get("Date","")) + "|" +
-            _norm_col(df_all.get("City","")) + "|" +
-            _norm_col(df_all.get("MeetName","")) + "|" +
-            _norm_col(df_all.get("PoolName","")) + "|" +
-            _norm_col(df_all.get("LengthMeters",""))
-        )
-
-    df_all = df_all.drop_duplicates("__k__", keep="first").drop(columns="__k__")
-    df_all.to_csv(p, index=False, encoding="utf-8-sig")
-
-# =====================
-# GitHub 推送（可选）
-# =====================
-def github_upsert(repo: str, token: str, path_in_repo: str, content_bytes: bytes, commit_msg: str):
-    """用 GitHub API create/update contents"""
-    api = f"https://api.github.com/repos/{repo}/contents/{path_in_repo}"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-
-    # 先查 sha（判断是否已存在）
-    r = requests.get(api, headers=headers)
-    if r.status_code == 200:
-        sha = r.json().get("sha")
-    else:
-        sha = None
+    # Check if exists to get sha
+    resp = requests.get(url, headers=headers)
+    sha = None
+    if resp.status_code == 200:
+        try:
+            sha = resp.json().get("sha")
+        except Exception:
+            sha = None
 
     payload = {
-        "message": commit_msg,
+        "message": commit_message,
         "content": base64.b64encode(content_bytes).decode("utf-8"),
-        "branch": "main",
+        "branch": "main"
     }
     if sha:
         payload["sha"] = sha
 
-    r2 = requests.put(api, headers=headers, data=json.dumps(payload))
-    if r2.status_code not in (200, 201):
-        raise RuntimeError(f"GitHub 推送失败：{r2.status_code} {r2.text}")
+    put = requests.put(url, headers=headers, data=json.dumps(payload))
+    if put.status_code in (200, 201):
+        return True, "OK"
+    else:
+        try:
+            msg = put.json()
+        except Exception:
+            msg = {"status": put.status_code, "text": put.text}
+        st.warning(f"GitHub 推送失败: {msg}")
+        return False, msg
 
-def try_push_to_github(local_path: Path, rel_path_in_repo: str, commit_msg: str):
-    token = st.secrets.get("GITHUB_TOKEN")
-    repo = st.secrets.get("REPO")
-    if not token or not repo:
-        return  # 未配置就忽略
-    github_upsert(repo, token, rel_path_in_repo, local_path.read_bytes(), commit_msg)
+def read_csv_if_exists(path: Path, **kwargs) -> pd.DataFrame:
+    if path.exists():
+        try:
+            return pd.read_csv(path, **kwargs)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-# =====================
-# UI 辅助
-# =====================
-def list_meets() -> list[Path]:
-    if not MEETS_ROOT.exists():
-        return []
-    ds = [p for p in MEETS_ROOT.iterdir() if p.is_dir()]
-    return sorted(ds)
+def write_csv(df: pd.DataFrame, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
 
-def latest_meet_dir() -> Path | None:
-    ms = list_meets()
-    return ms[-1] if ms else None
+def list_meets():
+    ensure_meets_root()
+    items = []
+    for p in sorted(MEETS_ROOT.glob("*")):
+        if not p.is_dir():
+            continue
+        meta = p / "meta.csv"
+        row = {"folder": p.name}
+        if meta.exists():
+            try:
+                m = pd.read_csv(meta)
+                if not m.empty:
+                    row.update(m.iloc[0].to_dict())
+            except Exception:
+                pass
+        items.append(row)
+    # sort by Date desc
+    def _key(x):
+        d = x.get("Date") or ""
+        try:
+            return dt.datetime.strptime(d, "%Y-%m-%d")
+        except Exception:
+            return dt.datetime.min
+    items.sort(key=_key, reverse=True)
+    return items
 
-def ensure_state_defaults(row_count: int):
-    """确保控件 key 存在（避免 safe_session_state 赋值报错）"""
-    for i in range(1, row_count+1):
-        for f in ("Name","EventName","Result","Rank","Note"):
-            st.session_state.setdefault(f"{f}_{i}", "")
+def load_meet_results(folder: str) -> pd.DataFrame:
+    path = MEETS_ROOT / folder / "results.csv"
+    df = read_csv_if_exists(path)
+    return df
 
-def clear_result_inputs(row_count: int):
-    """保存后清空输入并刷新"""
-    for i in range(1, row_count+1):
-        for f in ("Name","EventName","Result","Rank","Note"):
-            st.session_state.pop(f"{f}_{i}", None)
-    st.session_state.pop("rows_count", None)
-    st.rerun()
+def load_meet_meta(folder: str) -> pd.Series:
+    path = MEETS_ROOT / folder / "meta.csv"
+    m = read_csv_if_exists(path)
+    if m.empty:
+        return pd.Series(dtype=object)
+    return m.iloc[0]
 
-DEFAULT_EVENTS = [
-    # 25m池典型项目
-    "25m Freestyle","50m Freestyle","100m Freestyle","200m Freestyle",
-    "25m Backstroke","50m Backstroke","100m Backstroke","200m Backstroke",
-    "25m Breaststroke","50m Breaststroke","100m Breaststroke","200m Breaststroke",
-    "25m Butterfly","50m Butterfly","100m Butterfly","200m Butterfly",
-    "100m IM","200m IM","400m Freestyle",
-]
+def build_event_options(existing_df: pd.DataFrame) -> list:
+    options = list(STANDARD_EVENTS)
+    if not existing_df.empty and "EventName" in existing_df.columns:
+        extra = [x for x in existing_df["EventName"].dropna().unique().tolist() if x not in options]
+        options.extend(extra)
+    return options
+
+def add_rows_and_save(folder: str, rows: list):
+    """rows: list of dicts with required fields"""
+    df = load_meet_results(folder)
+    base_cols = [
+        "Name", "EventName", "Result", "Rank", "Note",
+        "Seconds", "Date", "City", "MeetName", "PoolName", "LengthMeters"
+    ]
+    if df.empty:
+        df = pd.DataFrame(columns=base_cols)
+    # Append
+    add_df = pd.DataFrame(rows, columns=base_cols)
+    # Deduplicate on a set of columns to avoid accidental duplicate save clicks
+    subset = ["Name", "EventName", "Result", "Date", "City", "MeetName", "PoolName", "LengthMeters"]
+    merged = pd.concat([df, add_df], ignore_index=True)
+    merged = merged.drop_duplicates(subset=subset, keep="first")
+    # Sort (optional) by Seconds asc if present
+    if "Seconds" in merged.columns:
+        merged = merged.sort_values(by=["EventName", "Seconds"], ascending=[True, True], na_position="last")
+    # Save local
+    local_path = MEETS_ROOT / folder / "results.csv"
+    write_csv(merged, local_path)
+    # Push GitHub
+    with open(local_path, "rb") as f:
+        ok, msg = push_to_github(str(local_path).replace("\\", "/"), f.read(), f"Save results for {folder}")
+    return merged, ok
+
+def delete_selected_and_save(folder: str, indices: list):
+    df = load_meet_results(folder)
+    if df.empty or not indices:
+        return df, False
+    keep = df.index.difference(indices)
+    new_df = df.loc[keep].reset_index(drop=True)
+    local_path = MEETS_ROOT / folder / "results.csv"
+    write_csv(new_df, local_path)
+    with open(local_path, "rb") as f:
+        ok, msg = push_to_github(str(local_path).replace("\\", "/"), f.read(), f"Delete rows in {folder}")
+    return new_df, ok
+
+def save_meta_and_push(date_str: str, city: str, meetname: str, poolname: str, length: int):
+    folder = meet_folder_name(date_str, city, poolname)
+    meta_path = MEETS_ROOT / folder / "meta.csv"
+    row = {
+        "Date": date_str,
+        "City": city,
+        "MeetName": meetname,
+        "PoolName": poolname,
+        "LengthMeters": int(length)
+    }
+    write_csv(pd.DataFrame([row]), meta_path)
+    with open(meta_path, "rb") as f:
+        ok, msg = push_to_github(str(meta_path).replace("\\", "/"), f.read(), f"Save meta for {folder}")
+    return folder, ok
+
+# ---------------------------
+# UI Sections
+# ---------------------------
 
 def section_meta():
-    st.subheader("① 新建/选择赛事（meta）")
-    with st.form("meta_form", clear_on_submit=False):
-        d = st.date_input("Date", value=date.today(), format="YYYY-MM-DD")
-        city = st.text_input("City", value="Chiang Mai")
-        meet_name = st.text_input("MeetName（必填）", value="", placeholder="例：Chiang Mai Local Meet")
-        pool_name = st.text_input("PoolName（必填）", value="", placeholder="例：National Sports University Chiang Mai Campus")
-        length_m = st.selectbox("LengthMeters", options=[25, 50], index=0)
+    st.markdown("## 🗂️ ① 新建/选择赛事（meta）")
 
-        push = st.checkbox("保存时推送到 GitHub（可选）", value=False)
-        submitted = st.form_submit_button("保存赛事信息（写入/推送 meta.csv）")
-        if submitted:
-            if not meet_name.strip() or not pool_name.strip():
-                st.error("❌ MeetName 与 PoolName 必填。")
-            else:
-                meet_dir = MEETS_ROOT / f"{d}_{city}_{pool_name}"
-                save_meta(meet_dir, d.isoformat(), city.strip(), meet_name.strip(), pool_name.strip(), int(length_m))
-                st.success(f"✅ 已保存：{meet_dir/'meta.csv'}")
-                if push:
-                    rel = f"{meet_dir}/meta.csv".replace("\\", "/")
-                    try:
-                        try_push_to_github(meet_dir/"meta.csv", rel, f"Save meta for {meet_dir.name}")
-                        st.info("GitHub 已推送 meta.csv")
-                    except Exception as e:
-                        st.warning(f"GitHub 推送失败：{e}")
+    today = dt.date.today().strftime("%Y-%m-%d")
+    col1, col2, col3 = st.columns([1,1,1])
+    with col1:
+        date_str = st.text_input("Date", value=today)
+    with col2:
+        city = st.text_input("City", value="Chiang Mai")
+    with col3:
+        length = st.selectbox("LengthMeters", options=[25,50], index=0)
+
+    meetname = st.text_input("MeetName（必填）", value="")
+    poolname = st.text_input("PoolName（必填）", value="")
+
+    if st.button("保存赛事信息（写入/推送 meta.csv）", type="primary"):
+        if not meetname.strip() or not poolname.strip():
+            st.error("MeetName 与 PoolName 均为必填。")
+        else:
+            folder, ok = save_meta_and_push(date_str, city, meetname.strip(), poolname.strip(), length)
+            st.success(f"已保存：{MEETS_ROOT / folder / 'meta.csv'}")
 
 def section_results_entry_and_manage():
-    st.subheader("② 新增成绩 & 管理")
-
+    st.markdown("## 📝 ② 新增成绩 / 管理")
     meets = list_meets()
-    if not meets:
-        st.info("当前尚无赛事，请先在上方创建 meta。")
+    folders = [x["folder"] for x in meets] if meets else []
+    if not folders:
+        st.info("当前没有赛事，请先在上方创建赛事。")
         return
-
-    default_idx = len(meets)-1
-    meet_dir = st.selectbox("选择赛事文件夹", options=meets, index=default_idx, format_func=lambda p: p.name)
-    meta = load_meta(meet_dir)
-
-    # ========== 已登记记录（先展示） ==========
-    st.markdown("**已登记记录（可编辑/删除）**")
-    df = load_results(meet_dir)
-
-    # EventName 可见
-    display_cols = ["Name","EventName","Result","Rank","Note","Seconds","Date","City","MeetName","PoolName","LengthMeters"]
-    for c in display_cols:
-        if c not in df.columns:
-            df[c] = ""
-
-    # 操作区域：删除勾选
-    if not df.empty:
-        _sel = st.multiselect("选择要删除的行（按行号）", options=list(df.index), format_func=lambda i: f"{i+1}：{df.loc[i,'Name']} - {df.loc[i,'EventName']} - {df.loc[i,'Result']}")
-        col_del, col_save = st.columns([1,1])
-        with col_del:
-            if st.button("🗑️ 删除所选行（需要再点一次下方“保存更改”才会落盘）", type="secondary", use_container_width=True, disabled=len(_sel)==0):
-                st.session_state["__to_delete__"] = list(_sel)
-                st.info(f"已标记待删除：{len(_sel)} 行，请点击下方 **保存更改**。")
-
-        with col_save:
-            if st.button("💾 保存更改（写入 results.csv）", use_container_width=True):
-                to_delete = st.session_state.pop("__to_delete__", [])
-                if to_delete:
-                    df2 = df.drop(index=to_delete).reset_index(drop=True)
-                else:
-                    df2 = df
-                # 统一 Seconds/Result 格式
-                df2["Seconds"] = df2["Result"].map(parse_time_to_seconds)
-                df2["Result"] = df2["Seconds"].map(seconds_to_mssxx)
-                df2.to_csv(meet_dir/"results.csv", index=False, encoding="utf-8-sig")
-                st.success("更改已保存。")
-                st.rerun()
-
-        # 显示（按成绩由短到长）
-        df_show = df.copy()
-        df_show["Seconds"] = df_show["Seconds"].map(lambda x: parse_time_to_seconds(str(x)) if pd.notna(x) else np.nan)
-        df_show = df_show.sort_values("Seconds", na_position="last").reset_index(drop=True)
-        st.dataframe(df_show[display_cols], use_container_width=True, hide_index=True)
+    # 默认选择最近（列表已按日期倒序）
+    folder = st.selectbox("选择赛事文件夹", options=folders, index=0)
+    meta = load_meet_meta(folder)
+    # Show existing first
+    st.markdown("### ③ 已登记记录（可编辑/删除）")
+    df_exist = load_meet_results(folder)
+    if df_exist.empty:
+        st.info("本赛事暂无记录。")
     else:
-        st.info("该赛事暂时没有成绩记录。")
+        # Allow multi-select delete
+        # show essential columns
+        show_cols = ["Name", "EventName", "Result", "Rank", "Note", "Seconds", "Date", "City", "MeetName", "PoolName", "LengthMeters"]
+        for c in show_cols:
+            if c not in df_exist.columns:
+                df_exist[c] = ""
+        # Use selection box for indices
+        st.caption("勾选需要删除的记录（支持多选），然后点击下方“删除选中并保存”。")
+        selected = st.dataframe(df_exist[show_cols], use_container_width=True)
+        # Provide multi-select by indices via text input for now (Streamlit's DF selection is limited)
+        del_idxs_text = st.text_input("要删除的行号（用逗号分隔，例如：2,5,7）", value="")
+        if st.button("🗑️ 删除选中并保存（写入 results.csv 并推送 GitHub）"):
+            try:
+                idxs = [int(x.strip())-1 for x in del_idxs_text.split(",") if x.strip().isdigit()]
+            except Exception:
+                idxs = []
+            new_df, ok = delete_selected_and_save(folder, idxs)
+            st.success("已删除并保存（本地 & GitHub）。")
+            st.experimental_rerun()
 
     st.markdown("---")
-    # ========== 新增成绩（在已登记后面） ==========
+    st.markdown("### ④ 新增成绩")
+    # build event options
+    event_options = build_event_options(df_exist)
+    default_event = event_options[0] if event_options else "50m Freestyle"
+    event_selected = st.selectbox("Event 选择", options=event_options, index=event_options.index(default_event) if default_event in event_options else 0)
 
-    # 提供项目下拉（从默认 + 现有项目并集）
-    existing_events = sorted(df["EventName"].dropna().unique().tolist()) if not df.empty else []
-    options = sorted(set(DEFAULT_EVENTS + existing_events))
-    selected_event = st.selectbox("Event 选择", options=options, index=options.index("100m Freestyle") if "100m Freestyle" in options else 0)
-    rows_count = st.number_input("本次录入行数", min_value=1, max_value=10, value=1, step=1, key="rows_count")
+    rows = st.number_input("本次录入行数", min_value=1, max_value=10, value=1, step=1)
+    inputs = []
+    for i in range(1, rows+1):
+        st.markdown(f"#### 记录 {i}")
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        with c1:
+            name = st.text_input(f"Name_{i}", value="")
+        with c2:
+            eventname = st.text_input(f"EventName_{i}", value=event_selected)
+        with c3:
+            result = st.text_input(f"Result_{i}", value="")
+        with c4:
+            rank = st.text_input(f"Rank_{i}", value="")
+        note = st.text_input(f"Note_{i}", value="可留空")
+        inputs.append({"Name": name, "EventName": eventname, "Result": result, "Rank": rank, "Note": note})
 
-    ensure_state_defaults(int(rows_count))
-
-    # 输入区
-    rows = []
-    for i in range(1, int(rows_count)+1):
-        st.markdown(f"**记录 {i}**")
-        cols = st.columns([1,1,1,1])
-        name = cols[0].text_input(f"Name_{i}", key=f"Name_{i}", placeholder="选手名")
-        ev = cols[1].text_input(f"EventName_{i}", key=f"EventName_{i}", value=selected_event)
-        res = cols[2].text_input(f"Result_{i}", key=f"Result_{i}", placeholder="34.12 或 0:34.12")
-        rank = cols[3].text_input(f"Rank_{i}（可空）", key=f"Rank_{i}", value="")
-        note = st.text_input(f"Note_{i}", key=f"Note_{i}", placeholder="可留空")
-        rows.append((name, ev, res, rank, note))
-
-    col_left, col_right = st.columns([1,1])
-    push_now = col_left.checkbox("保存时推送到 GitHub（免下载上传）", value=False)
-    save_clicked = col_right.button("保存这些成绩", use_container_width=True)
-
-    if save_clicked:
-        # 组装新增 df
-        records = []
-        for name, ev, res, rank, note in rows:
-            if not str(name).strip() or not str(ev).strip() or not str(res).strip():
-                # 空行跳过
-                continue
-            seconds = parse_time_to_seconds(str(res))
-            if seconds is None:
-                st.warning(f"时间格式不合法：{res}（已跳过）")
-                continue
-            records.append({
-                "Name": str(name).strip(),
-                "EventName": str(ev).strip(),
-                "Result": seconds_to_mssxx(seconds),
-                "Rank": str(rank).strip() if str(rank).strip() else "",
-                "Note": str(note).strip(),
-                "Date": str(meta.get("Date", "")),
-                "City": str(meta.get("City","")),
-                "MeetName": str(meta.get("MeetName","")),
-                "PoolName": str(meta.get("PoolName","")),
-                "LengthMeters": int(meta.get("LengthMeters", 25)) if str(meta.get("LengthMeters","")).strip() else 25,
-                "Seconds": seconds,
-            })
-        if not records:
-            st.warning("没有有效数据可保存。")
+    if st.button("保存这些成绩（写入 results.csv 并推送 GitHub）", type="primary"):
+        # prepare rows
+        if meta.empty:
+            st.error("未找到赛事 meta，请返回上方保存赛事信息。")
         else:
-            df_new = pd.DataFrame(records)
-            write_results_dedup(meet_dir, df_new)
-            st.success(f"✅ 已保存 {len(records)} 条到 {meet_dir/'results.csv'}")
+            prepared = []
+            for r in inputs:
+                if not r["Name"].strip() or not r["EventName"].strip() or not r["Result"].strip():
+                    # skip incomplete
+                    continue
+                display, secs = parse_time_to_display_and_seconds(r["Result"])
+                row = {
+                    "Name": r["Name"].strip(),
+                    "EventName": r["EventName"].strip(),
+                    "Result": display if display else r["Result"].strip(),
+                    "Rank": r["Rank"].strip() if r["Rank"] is not None else "",
+                    "Note": r["Note"].strip() if r["Note"] else "",
+                    "Seconds": secs,
+                    "Date": meta.get("Date", ""),
+                    "City": meta.get("City", ""),
+                    "MeetName": meta.get("MeetName", ""),
+                    "PoolName": meta.get("PoolName", ""),
+                    "LengthMeters": meta.get("LengthMeters", "")
+                }
+                prepared.append(row)
+            if not prepared:
+                st.warning("没有可保存的完整记录（Name / Event / Result 必填）。")
+            else:
+                merged, ok = add_rows_and_save(folder, prepared)
+                st.success(f"已保存 {len(prepared)} 条到 {MEETS_ROOT / folder / 'results.csv'}（并已推送）。")
+                # clear inputs by rerun
+                st.experimental_rerun()
 
-            # 推送到 GitHub（可选）
-            if push_now:
-                rel = f"{meet_dir}/results.csv".replace("\\", "/")
-                try:
-                    try_push_to_github(meet_dir/"results.csv", rel, f"Append results for {meet_dir.name}")
-                    st.info("GitHub 已推送 results.csv")
-                except Exception as e:
-                    st.warning(f"GitHub 推送失败：{e}")
-
-            # 清空输入并刷新，避免重复保存
-            clear_result_inputs(int(rows_count))
-
-# =====================
-# 页面：查询 / 对比
-# =====================
-def page_browse():
-    st.header("🏊‍♂️ 游泳成绩查询 / 对比")
-
-    # 合并所有 meets 的 results 进行查询
-    frames = []
-    for m in list_meets():
-        p = m/"results.csv"
-        if p.exists():
-            df = pd.read_csv(p)
-            df["__meet__"] = m.name
-            frames.append(df)
-    if not frames:
-        st.info("当前没有可查询的成绩，请先录入。")
+def section_query():
+    st.markdown("## 🔎 ⑤ 成绩查询 / 对比")
+    # gather all results
+    ensure_meets_root()
+    all_rows = []
+    for p in MEETS_ROOT.glob("*/*"):
+        if p.name == "results.csv":
+            df = read_csv_if_exists(p)
+            if not df.empty:
+                all_rows.append(df)
+    if not all_rows:
+        st.info("未找到任何成绩数据。")
         return
+    data = pd.concat(all_rows, ignore_index=True)
+    # filters
+    names = sorted([x for x in data["Name"].dropna().unique().tolist() if str(x).strip()])
+    name_sel = st.multiselect("Name（可多选）", names, default=names[:1] if names else [])
+    events_all = sorted([x for x in data["EventName"].dropna().unique().tolist() if str(x).strip()])
+    event_sel = st.selectbox("Event", options=["全部"] + events_all, index=0)
+    len_options = sorted([int(x) for x in data["LengthMeters"].dropna().unique().tolist()])
+    length_sel = st.selectbox("Length (Meters)", options=["全部"] + len_options, index=0)
 
-    data = pd.concat(frames, ignore_index=True)
-    # 统一 Seconds、Result
-    data["Seconds"] = data["Seconds"] if "Seconds" in data.columns else data["Result"].map(parse_time_to_seconds)
-    data["Result"] = data["Seconds"].map(seconds_to_mssxx)
+    df = data.copy()
+    if name_sel:
+        df = df[df["Name"].isin(name_sel)]
+    if event_sel != "全部":
+        df = df[df["EventName"] == event_sel]
+    if length_sel != "全部":
+        df = df[df["LengthMeters"] == length_sel]
 
-    names = sorted(data["Name"].dropna().unique().tolist())
-    events = sorted(data["EventName"].dropna().unique().tolist())
-    lengths = ["全部"] + sorted(data["LengthMeters"].dropna().astype(str).unique().tolist())
+    # order by Seconds asc
+    if "Seconds" in df.columns:
+        df = df.sort_values(by=["Seconds"], ascending=[True], na_position="last")
 
-    pick_names = st.multiselect("Name（可多选）", options=names, default=names[:1] if names else [])
-    pick_event = st.selectbox("Event", options=["全部"]+events, index=0)
-    pick_len = st.selectbox("Length (Meters)", options=lengths, index=0)
+    st.dataframe(df, use_container_width=True)
 
-    q = data.copy()
-    if pick_names:
-        q = q[q["Name"].isin(pick_names)]
-    if pick_event != "全部":
-        q = q[q["EventName"]==pick_event]
-    if pick_len != "全部":
-        q = q[q["LengthMeters"].astype(str)==pick_len]
+# ---------------------------
+# Main
+# ---------------------------
 
-    if q.empty:
-        st.info("没有符合条件的记录。")
-        return
-
-    q = q.sort_values("Seconds", na_position="last")
-    show_cols = ["Name","EventName","Result","Rank","Note","Date","City","MeetName","PoolName","LengthMeters"]
-    for c in show_cols:
-        if c not in q.columns:
-            q[c] = ""
-    st.dataframe(q[show_cols], use_container_width=True, hide_index=True)
-
-# =====================
-# 主页面
-# =====================
 def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    st.title(APP_TITLE)
-
-    tab1, tab2 = st.tabs(["赛事管理 / 成绩录入", "查询 / 对比"])
-    with tab1:
-        section_meta()
-        st.markdown("---")
-        section_results_entry_and_manage()
-    with tab2:
-        page_browse()
+    st.title("🏊 游泳成绩系统（赛事制）")
+    section_meta()
+    st.divider()
+    section_results_entry_and_manage()
+    st.divider()
+    section_query()
 
 if __name__ == "__main__":
     main()
