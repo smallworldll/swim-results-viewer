@@ -351,8 +351,8 @@ def page_query():
     if pick_event != "全部":
         q = q[q["EventName"] == pick_event]
     if pick_len != "全部":
-        q = q[q["LengthMeters"].astype(str) == pick_len]
-
+        target = int(pick_len)
+        q = q[pd.to_numeric(q["LengthMeters"], errors="coerce").round().astype("Int64") == target]
     q = q.sort_values(by=["Seconds","Date","Name"], ascending=[True, True, True])
     show_cols = ["Name","Date","EventName","Result","Rank","Note","City","PoolName","LengthMeters","MeetName"]
     show_cols = [c for c in show_cols if c in q.columns]
