@@ -188,7 +188,7 @@ def delete_indices_and_push(meet_dir: Path, indices: List[int]):
 
 # ------------- UI Sections -------------
 DEFAULT_EVENTS = [
-    "25m Freestyle","50m Freestyle","100m Freestyle","200m Freestyle","400m Freestyle",
+    "25m Freestyle","50m Freestyle","100m Freestyle","200m Freestyle","400m Freestyle","800m Freestyle",
     "25m Backstroke","50m Backstroke","100m Backstroke","200m Backstroke",
     "25m Breaststroke","50m Breaststroke","100m Breaststroke","200m Breaststroke",
     "25m Butterfly","50m Butterfly","100m Butterfly","200m Butterfly",
