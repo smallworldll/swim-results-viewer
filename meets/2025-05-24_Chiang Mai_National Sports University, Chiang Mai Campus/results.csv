@@ -1,9 +1,10 @@
-﻿Name,EventName,Result,Rank,Note,Date,City,MeetName,PoolName,LengthMeters
-Anna,50m Backstroke,0:43.14,17,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Bai Ou,50m Backstroke,0:40.05,8,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Anna,25m Breaststroke,0:20.42,7,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Bai Ou,25m Breaststroke,0:19.22,2,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Bai Ou,50m Butterfly,0:40.14,10,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Anna,50m Butterfly,0:38.66,7,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Bai Ou,25m Freestyle,0:15.08,3,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
-Anna,25m Freestyle,0:16.52,15,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25
+﻿Name,EventName,Result,Rank,Note,Date,City,MeetName,PoolName,LengthMeters,Seconds
+Anna,50m Backstroke,0:43.14,17,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,43.14
+Bai Ou,50m Backstroke,0:40.05,8,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,40.05
+Anna,25m Breaststroke,0:20.42,7,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,20.42
+Bai Ou,25m Breaststroke,0:19.22,2,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,19.22
+Bai Ou,50m Butterfly,0:40.14,10,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,40.14
+Anna,50m Butterfly,0:38.66,7,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,38.66
+Bai Ou,25m Freestyle,0:15.08,3,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,15.08
+Anna,25m Freestyle,0:16.52,15,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,16.52
+Pami,50m Backstroke,0:42.90,16,,2025-05-24,Chiang Mai,Chiang Mai Swimming Championship 2025,"National Sports University, Chiang Mai Campus",25,42.9
