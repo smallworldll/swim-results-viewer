@@ -308,13 +308,13 @@ def section_results_and_manage():
                 "EventName": str(ev).strip(),
                 "Result": seconds_to_mssxx(secs),
                 "Rank": str(rk).strip() if str(rk).strip() else "",
+                "LengthMeters": int(meta.get('LengthMeters', 25)) if str(meta.get('LengthMeters','')).strip() else 25,
                 "Note": str(note).strip(),
                 "Seconds": secs,
                 "Date": str(meta.get('Date','')),
                 "City": str(meta.get('City','')),
                 "MeetName": str(meta.get('MeetName','')),
-                "PoolName": str(meta.get('PoolName','')),
-                "LengthMeters": int(meta.get('LengthMeters', 25)) if str(meta.get('LengthMeters','')).strip() else 25,
+                "PoolName": str(meta.get('PoolName','')), 
             })
         if not rows:
             st.info("没有有效行可保存。")
