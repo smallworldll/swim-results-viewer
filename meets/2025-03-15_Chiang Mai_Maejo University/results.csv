@@ -1,3 +1,5 @@
-﻿Name,EventName,Result,Rank,Note,Date,City,MeetName,PoolName,LengthMeters
-Anna,100m Butterfly,1:44.06,26,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50
-Bai Ou,100m Butterfly,1:39.40,22,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50
+﻿Name,EventName,Result,Rank,Note,Date,City,MeetName,PoolName,LengthMeters,Seconds
+Anna,100m Butterfly,1:44.06,26,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50,104.06
+Bai Ou,100m Butterfly,1:39.40,22,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50,99.4
+Anna,50m Breaststroke,0:47.77,21,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50,47.77
+Bai Ou,50m Breaststroke,0:42.80,9,,2025-03-15,Chiang Mai,"Thailand Swimming Championship, Region 5 (North), 2025",Maejo University,50,42.8
