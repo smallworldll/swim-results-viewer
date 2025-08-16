@@ -1,4 +1,5 @@
 ﻿Name,EventName,Result,Rank,Note,Seconds,Date,City,MeetName,PoolName,LengthMeters
-Anna,50m Breaststroke,0:43.94,4,,43.94,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25
-Anna,200m IM,3:03.83,4,脚打滑,183.83,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25
-Pami,200m IM,3:06.30,5,,186.3,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25
+Anna,50m Breaststroke,0:43.94,4.0,,43.94,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25.0
+Anna,200m IM,3:03.83,4.0,脚打滑,183.83,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25.0
+Pami,200m IM,3:06.30,5.0,,186.3,2025-08-16,Chiang Rai,Northern Short Course (NSC) Swimming Championship 2025,"Luk Pho Khun Mengrai, Chiang Rai Province",25.0
+,,,,,,,,,,
